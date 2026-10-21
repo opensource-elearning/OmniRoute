@@ -96,6 +96,7 @@ import {
   stripProxyToolPrefix,
 } from "./claudeIdentity.ts";
 import { withForcedResponsesUpstream } from "./forceResponsesUpstream.ts";
+import { finalizeClaudeThinkingOptions } from "./claudeThinkingOptions.ts";
 import { detachClaudeCodeRewriteTargets } from "./claudeOauthBodyIsolation.ts";
 import {
   mergeUpstreamExtraHeaders,
@@ -131,6 +132,7 @@ export type { ProviderCredentials, StrictValidationDispatch } from "./base/valid
 import { applyReasoningEffortRecovery } from "./base/reasoningEffortRecovery.ts";
 import { applyFieldDowngradeRecovery } from "./base/fieldDowngradeRecovery.ts";
 import { applyAdvisorUndecryptableRecovery } from "./base/advisorRecovery.ts";
+import { stripRedactThinkingBetaForVisibleThinking } from "./base/redactThinkingBeta.ts";
 
 function parseSerializedBody(bodyString: string): unknown {
   try {
@@ -227,11 +229,7 @@ export type CountTokensInput = {
   signal?: AbortSignal | null;
 };
 
-import {
-  hasActiveClaudeThinking,
-  readNestedThinkingBudget,
-  clampNestedThinkingBudget,
-} from "../utils/thinkingBudget.ts";
+import { readNestedThinkingBudget, clampNestedThinkingBudget } from "../utils/thinkingBudget.ts";
 
 /**
  * Strip the OmniRoute provider prefix from tool model fields (e.g.
@@ -1150,14 +1148,12 @@ export class BaseExecutor {
             }
           }
 
-          // Real CLI always pairs context_management with thinking. Mirror
-          // that invariant so long sessions don't accumulate thinking blocks
-          // toward the context cap.
-          if (hasActiveClaudeThinking(tb) && !tb.context_management) {
-            tb.context_management = {
-              edits: [{ type: "clear_thinking_20251015", keep: "all" }],
-            };
-          }
+          finalizeClaudeThinkingOptions(
+            tb,
+            this.provider,
+            getClaudeCodeCompatibleRequestDefaults(requestCredentials?.providerSpecificData)
+              .summarizeThinking === true
+          );
 
           const seed = activeCredentials?.accessToken || activeCredentials?.apiKey || "anon";
           const psd = activeCredentials?.providerSpecificData as
@@ -1408,6 +1404,13 @@ export class BaseExecutor {
           );
         }
 
+        // Explicit `thinking.display: "summarized"` must not be blanked by redact-thinking.
+        // Claude OAuth keeps its fingerprint beta unless the default-off
+        // CLAUDE_OAUTH_SUMMARIZED_THINKING_UNREDACTED flag is on.
+        stripRedactThinkingBetaForVisibleThinking(headers, transformedBody, clientHeaders, {
+          connectionOptedIn: ccRequestDefaults.redactThinking === true,
+          claudeOAuth: this.provider === "claude" && hasClaudeOAuthToken,
+        });
         stripInternalBodyFields(transformedBody);
 
         const shouldFingerprint =
